@@ -21,3 +21,153 @@ const response = await ollama.chat({
   messages: [{role: 'user', content: 'Hello!'}],
 })
 console.log(response.message.content)
+
+Decrpyt/Encrypt DB
+1. Encrypt before saving, decrypt after reading (recommended)
+In your Node.js application:
+Encrypt the value before INSERT/UPDATE.
+Store the encrypted text in MySQL.
+Read the encrypted value from MySQL.
+Decrypt it in Node.js before using it.
+
+Database stores encrypted data only.
+
+Example:
+
+const crypto = require('crypto');
+
+const algorithm = 'aes-256-gcm';
+const key = crypto.randomBytes(32); // Store securely, not in code
+
+function encrypt(text) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(algorithm, key, iv);
+
+  let encrypted = cipher.update(String(text), 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+
+  const tag = cipher.getAuthTag();
+
+  return `${iv.toString('hex')}:${tag.toString('hex')}:${encrypted}`;
+}
+
+function decrypt(data) {
+  const [ivHex, tagHex, encrypted] = data.split(':');
+
+  const decipher = crypto.createDecipheriv(
+    algorithm,
+    key,
+    Buffer.from(ivHex, 'hex')
+  );
+
+  decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+
+  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+
+  return decrypted;
+}
+
+Save:
+
+const encryptedEmail = encrypt('user@example.com');
+await db.query(
+  'INSERT INTO users(email) VALUES (?)',
+  [encryptedEmail]
+);
+
+Read:
+
+const [rows] = await db.query(
+  'SELECT email FROM users WHERE id = ?',
+  [1]
+);
+
+const email = decrypt(rows[0].email);
+2. MySQL encryption functions
+
+MySQL provides functions like:
+
+INSERT INTO users(secret)
+VALUES (AES_ENCRYPT('my secret', 'password'));
+
+and
+
+SELECT AES_DECRYPT(secret, 'password')
+FROM users;
+
+However, this is usually less secure because:
+
+The encryption key may end up in SQL queries.
+Key management becomes difficult.
+Application-level encryption is more flexible.
+Important note
+
+If you encrypt values:
+
+Searching (WHERE email = ?) becomes difficult.
+Sorting and indexing may not work as expected.
+For fields that need searching (email, username), many systems store:
+encrypted value
+plus a SHA-256 hash for lookups
+
+Example:
+
+email_encrypted = encrypt(email);
+email_hash = sha256(email.toLowerCase());
+
+Node 8
+Simple working encryption for Node 8 (recommended)
+
+This is a stable pattern for DB storage.
+
+Encryption / Decryption
+const crypto = require('crypto');
+
+const algorithm = 'aes-256-cbc';
+
+// You should store this in env, NOT in code
+const key = crypto
+  .createHash('sha256')
+  .update(String('your-secret-password'))
+  .digest(); // 32 bytes key
+
+function encrypt(text) {
+  const iv = crypto.randomBytes(16);
+
+  const cipher = crypto.createCipheriv(algorithm, key, iv);
+
+  let encrypted = cipher.update(String(text), 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+
+  // store iv + encrypted together
+  return iv.toString('hex') + ':' + encrypted;
+}
+
+function decrypt(data) {
+  const parts = data.split(':');
+  const iv = Buffer.from(parts[0], 'hex');
+  const encryptedText = parts[1];
+
+  const decipher = crypto.createDecipheriv(algorithm, key, iv);
+
+  let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+
+  return decrypted;
+}
+MySQL usage stays simple
+Save (encrypted)
+const value = encrypt('hello world');
+
+await db.query(
+  'INSERT INTO my_table(secret_value) VALUES (?)',
+  [value]
+);
+Read (decrypt in app)
+const [rows] = await db.query(
+  'SELECT secret_value FROM my_table WHERE id = ?',
+  [1]
+);
+
+const original = decrypt(rows[0].secret_value);
